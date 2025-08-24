@@ -1,6 +1,8 @@
 import streamlit as st
 import numpy as np
 import tensorflow as tf
+import matplotlib
+matplotlib.use("Agg")  # ✅ Fix backend for Streamlit Cloud
 import matplotlib.pyplot as plt
 import cv2
 from tensorflow.keras.datasets import mnist
@@ -65,7 +67,7 @@ def draw_layer_connections(ax, activations, weights, ypos, next_ypos):
         for j in range(next_nodes):
             w = weights[i, j]
             color = "purple" if w > 0 else "green"
-            alpha = min(1.0, abs(w) / np.max(np.abs(weights)))
+            alpha = min(1.0, abs(w) / (np.max(np.abs(weights)) + 1e-6))
             ax.plot([x[i], next_x[j]], [ypos, next_ypos], color=color, alpha=alpha, linewidth=0.5)
 
     # nodes
@@ -76,54 +78,57 @@ def draw_layer_connections(ax, activations, weights, ypos, next_ypos):
 # 4. Run prediction if drawn
 # -------------------
 if canvas_result.image_data is not None:
-    img = canvas_result.image_data[:, :, 0]
-    img = cv2.resize(img, (28, 28)) / 255.0
-    img = np.expand_dims(img, axis=(0,))
+    if canvas_result.image_data.sum() == 0:
+        st.warning("✏️ Please draw a digit first!")
+    else:
+        img = canvas_result.image_data[:, :, 0]
+        img = cv2.resize(img, (28, 28)) / 255.0
+        img = np.expand_dims(img, axis=(0,))
 
-    activations = activation_model.predict(img)
-    prediction = np.argmax(activations[-1])
+        activations = activation_model.predict(img)
+        prediction = np.argmax(activations[-1])
 
-    st.subheader(f"🎯 Predicted Digit: {prediction}")
+        st.subheader(f"🎯 Predicted Digit: {prediction}")
 
-    # -------------------
-    # 5. Visualization
-    # -------------------
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.axis("off")
+        # -------------------
+        # 5. Visualization
+        # -------------------
+        fig, ax = plt.subplots(figsize=(6, 6))
+        ax.axis("off")
 
-    ypos = 0.9
+        ypos = 0.9
 
-    # Flatten layer (first activation)
-    flatten_act = activations[0][0]
-    ax.scatter(np.linspace(0.1, 0.9, len(flatten_act)), [ypos]*len(flatten_act),
-               s=50, c=flatten_act, cmap="gray", edgecolors="black")
+        # Flatten layer (first activation)
+        flatten_act = activations[0][0]
+        ax.scatter(np.linspace(0.1, 0.9, len(flatten_act)), [ypos]*len(flatten_act),
+                   s=50, c=flatten_act, cmap="gray", edgecolors="black")
 
-    prev_act = flatten_act
-    prev_ypos = ypos
-
-    # Loop over Dense layers and draw connections
-    dense_layer_index = 0  # index inside model.layers to fetch weights
-
-    for act in activations[1:]:  # skip flatten layer
-        # Find the matching Dense layer in the model
-        while not isinstance(model.layers[dense_layer_index], Dense):
-            dense_layer_index += 1
-        dense_layer = model.layers[dense_layer_index]
-        weights, bias = dense_layer.get_weights()
-
-        ypos -= 0.25
-        draw_layer_connections(ax, act[0], weights, prev_ypos, ypos)
-
+        prev_act = flatten_act
         prev_ypos = ypos
-        prev_act = act[0]
-        dense_layer_index += 1
 
-    # Output layer (last one)
-    output_act = activations[-1][0]
-    ypos -= 0.3
-    x = np.linspace(0.1, 0.9, 10)
-    ax.scatter(x, [ypos]*10, s=200, c=output_act, cmap="plasma", edgecolors="black")
-    for i, d in enumerate(range(10)):
-        ax.text(x[i], ypos-0.05, str(d), ha="center")
+        # Loop over Dense layers and draw connections
+        dense_layer_index = 0  # index inside model.layers to fetch weights
 
-    st.pyplot(fig)
+        for act in activations[1:]:  # skip flatten layer
+            # Find the matching Dense layer in the model
+            while not isinstance(model.layers[dense_layer_index], Dense):
+                dense_layer_index += 1
+            dense_layer = model.layers[dense_layer_index]
+            weights, bias = dense_layer.get_weights()
+
+            ypos -= 0.25
+            draw_layer_connections(ax, act[0], weights, prev_ypos, ypos)
+
+            prev_ypos = ypos
+            prev_act = act[0]
+            dense_layer_index += 1
+
+        # Output layer (last one)
+        output_act = activations[-1][0]
+        ypos -= 0.3
+        x = np.linspace(0.1, 0.9, 10)
+        ax.scatter(x, [ypos]*10, s=200, c=output_act, cmap="plasma", edgecolors="black")
+        for i, d in enumerate(range(10)):
+            ax.text(x[i], ypos-0.05, str(d), ha="center")
+
+        st.pyplot(fig)
