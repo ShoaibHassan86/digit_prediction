@@ -2,42 +2,24 @@ import streamlit as st
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
-import cv2
-from tensorflow.keras.datasets import mnist
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Flatten, Input
-from tensorflow.keras.utils import to_categorical
 from streamlit_drawable_canvas import st_canvas
 
 # -------------------
-# 1. Load/Train Model
+# 1. Load Trained Model
 # -------------------
-(x_train, y_train), (x_test, y_test) = mnist.load_data()
-x_train, x_test = x_train / 255.0, x_test / 255.0
-y_train = to_categorical(y_train, 10)
-y_test = to_categorical(y_test, 10)
-
-# ✅ Functional API
-inputs = Input(shape=(28, 28))
-x = Flatten()(inputs)
-x = Dense(25, activation="relu")(x)
-x = Dense(25, activation="relu")(x)
-outputs = Dense(10, activation="softmax")(x)
-
-model = tf.keras.Model(inputs=inputs, outputs=outputs)
-model.compile(optimizer="adam", loss="categorical_crossentropy", metrics=["accuracy"])
-model.fit(x_train, y_train, epochs=1, verbose=0)
-
-# ✅ Activation model (layer-wise outputs)
-layer_outputs = [layer.output for layer in model.layers if isinstance(layer, Dense) or isinstance(layer, Flatten)]
-activation_model = Model(inputs=model.input, outputs=layer_outputs)
+model = tf.keras.models.load_model("digit_model.h5")
 
 # -------------------
 # 2. Streamlit UI
 # -------------------
+st.set_page_config(page_title="Digit Recognition", layout="wide")
 st.title("🧠 Neural Network Live Digit Recognition")
-st.write("Draw a digit (0–9) and watch how it flows through the layers.")
 
+st.markdown("Draw a digit (0–9) in the box below:")
+
+# -------------------
+# 3. Drawing Canvas
+# -------------------
 canvas_result = st_canvas(
     fill_color="black",
     stroke_width=12,
@@ -46,84 +28,72 @@ canvas_result = st_canvas(
     width=280,
     height=280,
     drawing_mode="freedraw",
-    key="canvas",
+    key="canvas"
 )
 
 # -------------------
-# 3. Helper for connections
-# -------------------
-def draw_layer_connections(ax, activations, weights, ypos, next_ypos):
-    """Draw nodes & connections between two layers"""
-    nodes = activations.shape[-1]
-    next_nodes = weights.shape[1]
-
-    x = np.linspace(0.1, 0.9, nodes)
-    next_x = np.linspace(0.1, 0.9, next_nodes)
-
-    # connections
-    for i in range(nodes):
-        for j in range(next_nodes):
-            w = weights[i, j]
-            color = "purple" if w > 0 else "green"
-            alpha = min(1.0, abs(w) / np.max(np.abs(weights)))
-            ax.plot([x[i], next_x[j]], [ypos, next_ypos], color=color, alpha=alpha, linewidth=0.5)
-
-    # nodes
-    ax.scatter(x, [ypos]*nodes, s=100, c=activations, cmap="viridis", edgecolors="black")
-    return next_x
-
-# -------------------
-# 4. Run prediction if drawn
+# 4. Prediction Logic
 # -------------------
 if canvas_result.image_data is not None:
-    img = canvas_result.image_data[:, :, 0]
-    img = cv2.resize(img, (28, 28)) / 255.0
-    img = np.expand_dims(img, axis=(0,))
+    img = canvas_result.image_data
 
-    activations = activation_model.predict(img)
-    prediction = np.argmax(activations[-1])
+    if np.sum(img) > 0:  # Only if something is drawn
+        # Convert to grayscale & resize using TensorFlow
+        gray = img[:, :, 0]  # take single channel
+        gray = tf.image.resize(gray[..., np.newaxis], (28, 28)).numpy()
+        gray = gray.astype("float32") / 255.0
+        gray = gray.reshape(1, 28, 28)
 
-    st.subheader(f"🎯 Predicted Digit: {prediction}")
+        # Predict
+        preds = model.predict(gray)
+        pred_class = np.argmax(preds)
 
-    # -------------------
-    # 5. Visualization
-    # -------------------
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.axis("off")
+        st.subheader(f"✅ Predicted Digit: **{pred_class}**")
 
-    ypos = 0.9
+        # -------------------
+        # 5. Probability Bar Chart
+        # -------------------
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.bar(range(10), preds[0])
+        ax.set_xticks(range(10))
+        ax.set_xlabel("Digit")
+        ax.set_ylabel("Probability")
+        ax.set_title("Prediction Confidence")
+        st.pyplot(fig)
 
-    # Flatten layer (first activation)
-    flatten_act = activations[0][0]
-    ax.scatter(np.linspace(0.1, 0.9, len(flatten_act)), [ypos]*len(flatten_act),
-               s=50, c=flatten_act, cmap="gray", edgecolors="black")
+        # -------------------
+        # 6. Visualize Activations
+        # -------------------
+        st.subheader("🔍 Layer Activations")
 
-    prev_act = flatten_act
-    prev_ypos = ypos
+        # Create sub-model to get activations
+        layer_outputs = [layer.output for layer in model.layers if "dense" in layer.name]
+        activation_model = tf.keras.models.Model(inputs=model.input, outputs=layer_outputs)
+        activations = activation_model.predict(gray)
 
-    # Loop over Dense layers and draw connections
-    dense_layer_index = 0  # index inside model.layers to fetch weights
+        fig, ax = plt.subplots(figsize=(8, 6))
+        ax.axis("off")
+        ypos = 1.0
 
-    for act in activations[1:]:  # skip flatten layer
-        # Find the matching Dense layer in the model
-        while not isinstance(model.layers[dense_layer_index], Dense):
-            dense_layer_index += 1
-        dense_layer = model.layers[dense_layer_index]
-        weights, bias = dense_layer.get_weights()
+        # Plot each layer's activations
+        for idx, act in enumerate(activations[:-1]):
+            values = act[0]
+            x = np.linspace(0.1, 0.9, len(values))
+            ax.scatter(x, [ypos] * len(values), s=100, c=values, cmap="viridis", edgecolors="black")
+            ax.text(0.0, ypos, f"Layer {idx+1}", ha="right")
+            ypos -= 0.15
 
-        ypos -= 0.25
-        draw_layer_connections(ax, act[0], weights, prev_ypos, ypos)
+        # Final output layer
+        output_act = activations[-1][0]
+        x = np.linspace(0.1, 0.9, 10)
+        ax.scatter(x, [ypos]*10, s=200, c=output_act, cmap="plasma", edgecolors="black")
+        for i, d in enumerate(range(10)):
+            ax.text(x[i], ypos-0.05, str(d), ha="center")
 
-        prev_ypos = ypos
-        prev_act = act[0]
-        dense_layer_index += 1
+        st.pyplot(fig)
 
-    # Output layer (last one)
-    output_act = activations[-1][0]
-    ypos -= 0.3
-    x = np.linspace(0.1, 0.9, 10)
-    ax.scatter(x, [ypos]*10, s=200, c=output_act, cmap="plasma", edgecolors="black")
-    for i, d in enumerate(range(10)):
-        ax.text(x[i], ypos-0.05, str(d), ha="center")
-
-    st.pyplot(fig)
+# -------------------
+# 7. Clear Button
+# -------------------
+if st.button("🧹 Clear Canvas"):
+    st.experimental_rerun()
